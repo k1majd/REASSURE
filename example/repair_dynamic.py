@@ -32,18 +32,18 @@ def success_rate(model, buggy_inputs, right_label, is_print=0):
 
 
 def original_data_loader():
-    load_str = "_5_31_2022_16_35_50"
+    load_str = "_6_9_2022_21_32_23"
     if not os.path.exists(
         os.path.dirname(os.path.realpath(__file__))
-        + "/repair_ex/global_constraint/data"
+        + "/repair_ex/dynamic_constraint/data"
     ):
         os.makedirs(
             os.path.dirname(os.path.realpath(__file__))
-            + "/repair_ex/global_constraint/data"
+            + "/repair_ex/dynamic_constraint/data"
         )
     with open(
         os.path.dirname(os.path.realpath(__file__))
-        + f"/repair_ex/global_constraint/data/repair_dataset{load_str}.pickle",
+        + f"/repair_ex/dynamic_constraint/data/repair_dataset{load_str}.pickle",
         "rb",
     ) as data:
         dataset = pickle.load(data)
@@ -80,12 +80,15 @@ def get_params(model_torch, weights):
     return model_torch
 
 
-def contstraint_bounding(num_samp):
+def contstraint_bounding(x):
+    num_samp = x.shape[0]
     A = []
     b = []
     for i in range(num_samp):
-        A.append(np.array([[1]]))
-        b.append(np.array([9.5]))
+        A.append(np.array([[1], [-1]]))
+        b.append(
+            np.array([2 + x[i, -1].detach().numpy(), 2 - x[i, -1].detach().numpy()])
+        )
     return A, b
 
 
@@ -98,25 +101,32 @@ def loadData(name_csv):
 def generateDataWindow(window_size):
     Dfem = loadData(
         os.path.dirname(os.path.realpath(__file__))
-        + "/repair_ex/global_constraint/data/GeoffFTF_1.csv"
+        + "/repair_ex/dynamic_constraint/data/GeoffFTF_1.csv"
     )
     Dtib = loadData(
         os.path.dirname(os.path.realpath(__file__))
-        + "/repair_ex/global_constraint/data/GeoffFTF_2.csv"
+        + "/repair_ex/dynamic_constraint/data/GeoffFTF_2.csv"
     )
     Dfut = loadData(
         os.path.dirname(os.path.realpath(__file__))
-        + "/repair_ex/global_constraint/data/GeoffFTF_3.csv"
+        + "/repair_ex/dynamic_constraint/data/GeoffFTF_3.csv"
     )
-    n = 20364
-    Dankle = np.subtract(Dtib[:n, 1], Dfut[:n, 1])
+    n = 20363
+    Dankle = np.subtract(Dtib[: n + 1, 1], Dfut[: n + 1, 1])
     observations = np.concatenate((Dfem[:n, 1:], Dtib[:n, 1:]), axis=1)
     observations = (observations - observations.mean(0)) / observations.std(0)
+    observations = np.concatenate(
+        (
+            observations,
+            Dankle[:n].reshape(n, 1),
+        ),
+        axis=1,
+    )
     controls = Dankle  # (Dankle - Dankle.mean(0))/Dankle.std(0)
     n_train = 18200
     # n_train = 500
-    train_observation = np.array([]).reshape(0, 4 * window_size)
-    test_observation = np.array([]).reshape(0, 4 * window_size)
+    train_observation = np.array([]).reshape(0, 5 * window_size)
+    test_observation = np.array([]).reshape(0, 5 * window_size)
     for i in range(n_train):
         temp_obs = np.array([]).reshape(1, 0)
         for j in range(window_size):
@@ -133,7 +143,12 @@ def generateDataWindow(window_size):
             )
         test_observation = np.concatenate((test_observation, temp_obs), axis=0)
     test_controls = controls[n_train + window_size :].reshape(-1, 1)
-    return train_observation, train_controls, test_observation, test_controls
+    return (
+        train_observation,
+        train_controls,
+        test_observation,
+        test_controls[:-1],
+    )
 
 
 def Repair_HCAS(repair_num, n):
@@ -142,7 +157,7 @@ def Repair_HCAS(repair_num, n):
     # load the original model
     model_orig = tf.keras.models.load_model(
         os.path.dirname(os.path.realpath(__file__))
-        + "/repair_ex/global_constraint/model_orig/model_orig"
+        + "/repair_ex/dynamic_constraint/model_orig/model_orig"
     )
     weights = model_orig.get_weights()
     # x_train, y_train, x_test, y_test = original_data_loader()
@@ -158,22 +173,24 @@ def Repair_HCAS(repair_num, n):
         inp_max.append(x_train[:, i].max())
         inp_min.append(x_train[:, i].min())
     inp_bound = [np.array(inp_max), -np.array(inp_min)]
-    adv_idx = np.where(model_orig.predict(x_train) > 10)[0]
+
+    delta_u = model_orig.predict(x_train).flatten() - x_train[:, -1].flatten()
+    adv_idx = np.where(np.abs(delta_u) > 1.9)[0]
     x_train = x_train[adv_idx]
     y_train = y_train[adv_idx]
     x_train = torch.tensor(x_train).float()
     y_train = torch.tensor(y_train).float()
     # x_test = torch.tensor(x_test).float()
     # y_test = torch.tensor(y_test).float()
-    model_torch = MLP(size=[40, 32, 32, 32, 1])
+    model_torch = MLP(size=[50, 32, 32, 32, 1])
     model_torch = get_params(model_torch, weights)
-    input_dim = 40
+    input_dim = 50
     input_boundary = [
         np.block([[np.eye(input_dim)], [-np.eye(input_dim)]]),
         np.block(inp_bound),
     ]
 
-    output_constraints = contstraint_bounding(x_train[:repair_num].shape[0])
+    output_constraints = contstraint_bounding(x_train[:repair_num])
     x_train = x_train[:repair_num]
     # success_rate(model_torch, buggy_inputs, right_labels, is_print=1)
     start = time.time()
@@ -181,19 +198,28 @@ def Repair_HCAS(repair_num, n):
     repaired_model = REASSURE.point_wise_repair(
         x_train, output_constraints=output_constraints, core_num=1
     )
+    cost_time = time.time() - start
     x_test = torch.tensor(test_obs).float()
     y_test = torch.tensor(test_ctrls).float()
     y_pred = repaired_model(x_test)
-    plt.plot(y_test.detach().numpy(), label="true")
-    plt.plot(y_pred.detach().numpy(), label="pred")
+    plt.plot(
+        y_test.detach().numpy().flatten() - x_test[:, -1].detach().numpy().flatten(),
+        label="true",
+    )
+    plt.plot(
+        y_pred.detach().numpy().flatten() - x_test[:, -1].detach().numpy().flatten(),
+        label="pred",
+    )
     plt.legend()
     plt.show()
-    cost_time = time.time() - start
     print("Time:", cost_time)
+    pickle.dump(repaired_model, open("model_torch_dynamic.pkl", "wb"))
+    model = pickle.load(open("model_torch_dynamic.pkl", "rb"))
+    model(x_test)
     # success_rate(repaired_model, buggy_inputs, right_labels, is_print=2)
 
 
 if __name__ == "__main__":
-    for num in [25]:
+    for num in [65]:
         print("-" * 50, "number:", num, "-" * 50)
         Repair_HCAS(num, 1)

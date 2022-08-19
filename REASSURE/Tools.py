@@ -8,7 +8,7 @@ def linearize_model(input, model):
     :return: f1, f2 where model(x) = f1*x+f2 on the linear region.
     """
     f1, f2 = [], []
-    for output in model(input).squeeze():
+    for output in model(input).flatten():
         model(input)
         output.backward(retain_graph=True)
         f1.append(input.grad.clone().detach().squeeze())
@@ -42,4 +42,9 @@ def linear_region_from_input(x, all_neurons, boundary):
 
 def dig_block(m: list):
     dim = len(m)
-    return np.block([[m[i] if i == j else np.zeros_like(m[i]) for i in range(dim)] for j in range(dim)])
+    return np.block(
+        [
+            [m[i] if i == j else np.zeros_like(m[i]) for i in range(dim)]
+            for j in range(dim)
+        ]
+    )
