@@ -80,14 +80,16 @@ def get_params(model_torch, weights):
     return model_torch
 
 
-def contstraint_bounding(x):
+def contstraint_bounding(x, bound=1.5):
     num_samp = x.shape[0]
     A = []
     b = []
     for i in range(num_samp):
         A.append(np.array([[1], [-1]]))
         b.append(
-            np.array([2 + x[i, -1].detach().numpy(), 2 - x[i, -1].detach().numpy()])
+            np.array(
+                [bound + x[i, -1].detach().numpy(), bound - x[i, -1].detach().numpy()]
+            )
         )
     return A, b
 
@@ -154,6 +156,8 @@ def generateDataWindow(window_size):
 def Repair_HCAS(repair_num, n):
     train_obs, train_ctrls, test_obs, test_ctrls = generateDataWindow(10)
 
+    bound = 1.5
+
     # load the original model
     model_orig = tf.keras.models.load_model(
         os.path.dirname(os.path.realpath(__file__))
@@ -175,7 +179,7 @@ def Repair_HCAS(repair_num, n):
     inp_bound = [np.array(inp_max), -np.array(inp_min)]
 
     delta_u = model_orig.predict(x_train).flatten() - x_train[:, -1].flatten()
-    adv_idx = np.where(np.abs(delta_u) > 1.9)[0]
+    adv_idx = np.where(np.abs(delta_u) > bound)[0]
     x_train = x_train[adv_idx]
     y_train = y_train[adv_idx]
     x_train = torch.tensor(x_train).float()
@@ -190,7 +194,7 @@ def Repair_HCAS(repair_num, n):
         np.block(inp_bound),
     ]
 
-    output_constraints = contstraint_bounding(x_train[:repair_num])
+    output_constraints = contstraint_bounding(x_train[:repair_num], bound)
     x_train = x_train[:repair_num]
     # success_rate(model_torch, buggy_inputs, right_labels, is_print=1)
     start = time.time()
@@ -213,13 +217,13 @@ def Repair_HCAS(repair_num, n):
     plt.legend()
     plt.show()
     print("Time:", cost_time)
-    pickle.dump(repaired_model, open("model_torch_dynamic.pkl", "wb"))
-    model = pickle.load(open("model_torch_dynamic.pkl", "rb"))
-    model(x_test)
+    pickle.dump(repaired_model, open("model_torch_dynamic_1_5.pkl", "wb"))
+    # model = pickle.load(open("model_torch_1_5.pkl", "rb"))
+    # model(x_test)
     # success_rate(repaired_model, buggy_inputs, right_labels, is_print=2)
 
 
 if __name__ == "__main__":
-    for num in [65]:
+    for num in [50]:
         print("-" * 50, "number:", num, "-" * 50)
         Repair_HCAS(num, 1)

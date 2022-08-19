@@ -190,6 +190,11 @@ def Repair_HCAS(repair_num, n):
     plt.show()
     cost_time = time.time() - start
     print("Time:", cost_time)
+    error = y_test.detach().numpy() - y_pred.detach().numpy()
+    pickle.dump(
+        [y_pred.detach().numpy().flatten(), error.flatten()],
+        open("model_torch_bound_data.pkl", "wb"),
+    )
     # success_rate(repaired_model, buggy_inputs, right_labels, is_print=2)
 
 
