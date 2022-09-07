@@ -196,8 +196,12 @@ def give_stats(model, x, y, y_pred_orig, bound):
     # introduced bugs
     idx_violation = np.where(y_pred_new > bound)[0]
     idx_orig_no_violate = np.where(y_pred_orig[idx_violation] < bound)[0]
+    if len(idx_violation) != 0:
+        intro_bug = len(idx_orig_no_violate) / len(idx_violation)
+    else:
+        intro_bug = 0
 
-    return satisfaction_rate, mae, len(idx_orig_no_violate) / len(idx_violation)
+    return satisfaction_rate, mae, intro_bug
 
 
 def Repair_HCAS(repair_num, n, id):

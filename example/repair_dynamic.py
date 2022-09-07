@@ -13,6 +13,7 @@ from example.nnet_reader import HCAS_Model
 from example.h5_reader import My_H5Dataset
 from REASSURE.ExperimentTools import constraints_from_labels
 import tensorflow as tf
+from scipy.interpolate import interp1d
 import pickle
 
 
@@ -153,10 +154,49 @@ def generateDataWindow(window_size):
     )
 
 
-def Repair_HCAS(repair_num, n):
-    train_obs, train_ctrls, test_obs, test_ctrls = generateDataWindow(10)
+def give_mean_and_upperstd(model, x_train, x_test, bound):
+    dist = []
+    violation = []
+    test_pred = model(x_test).detach().numpy()
+    x_test = x_test.detach().numpy()
+    x_train = x_train.detach().numpy()
+    for i in range(x_test.shape[0]):
+        dist.append(np.min(np.linalg.norm(x_train[:, :-1] - x_test[i, :-1], axis=1)))
+        temp = np.abs(test_pred[i] - x_test[i, -1]) - bound
+        if temp > 0:
+            violation.append(temp[0])
+        else:
+            violation.append(0.0)
 
-    bound = 1.5
+    dist = np.array(dist)
+    violation = np.array(violation)
+    num_bins = 14
+    bins = np.linspace(0, np.max(dist), num_bins + 1)
+    # mean and std of each bin in violation
+    violation_mean = []
+    violation_std = []
+    for i in range(num_bins):
+        idx = np.where(np.logical_and(dist >= bins[i], dist < bins[i + 1]))[0]
+        violation_mean.append(np.mean(violation[idx]))
+        violation_std.append(np.std(violation[idx]))
+
+    violation_mean = np.array(violation_mean)
+    violation_std = np.array(violation_std)
+
+    # plot interpolated violation error bars with mean and fill areas for std
+    upper_limit = violation_mean + violation_std
+    # lower_limit = violation_mean - violation_std
+    lim_uc = interp1d(bins[:-1], upper_limit, kind="cubic")
+    # lim_lc = interp1d(bins[:-1], lower_limit, kind="cubic")
+    mean = interp1d(bins[:-1], violation_mean, kind="cubic")
+    distance = np.linspace(0, np.max(bins[:-1]), 1000)
+    return lim_uc, mean, distance
+
+
+def Repair_HCAS(repair_num, n):
+    train_obs, train_ctrls, x_train, y_train = generateDataWindow(10)
+
+    bound = 2
 
     # load the original model
     model_orig = tf.keras.models.load_model(
@@ -203,8 +243,8 @@ def Repair_HCAS(repair_num, n):
         x_train, output_constraints=output_constraints, core_num=1
     )
     cost_time = time.time() - start
-    x_test = torch.tensor(test_obs).float()
-    y_test = torch.tensor(test_ctrls).float()
+    x_test = torch.tensor(train_obs).float()
+    y_test = torch.tensor(train_ctrls).float()
     y_pred = repaired_model(x_test)
     plt.plot(
         y_test.detach().numpy().flatten() - x_test[:, -1].detach().numpy().flatten(),
@@ -216,8 +256,15 @@ def Repair_HCAS(repair_num, n):
     )
     plt.legend()
     plt.show()
+    lim_uc, mean, distance = give_mean_and_upperstd(
+        repaired_model, x_train, torch.tensor(train_obs).float(), bound
+    )
+    plt.plot(distance, mean(distance), label="mean")
+    plt.show()
     print("Time:", cost_time)
-    pickle.dump(repaired_model, open("model_torch_dynamic_1_5.pkl", "wb"))
+    # pickle.dump(
+    #     [distance, mean(distance)], open("violation_degree_reassure_dyn_2.pkl", "wb")
+    # )
     # model = pickle.load(open("model_torch_1_5.pkl", "rb"))
     # model(x_test)
     # success_rate(repaired_model, buggy_inputs, right_labels, is_print=2)
